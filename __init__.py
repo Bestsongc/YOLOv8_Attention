@@ -53,7 +53,7 @@ from .conv import (
     SpatialAttention,
 )
 
-from .attention import SimAM, BiLevelRoutingAttention
+from .attention import SimAM, BiLevelRoutingAttention, BiLevelRoutingAttention_nchw
 
 from .head import Classify, Detect, Pose, RTDETRDecoder, Segment
 from .transformer import (
@@ -117,4 +117,5 @@ __all__ = (
     "MLP",
     "SimAM",
     "BiLevelRoutingAttention",
+    "BiLevelRoutingAttention_nchw",
 )

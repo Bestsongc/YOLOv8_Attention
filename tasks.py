@@ -40,6 +40,7 @@ from ultralytics.nn.modules import (
     Segment,
     SimAM,
     BiLevelRoutingAttention,
+    BiLevelRoutingAttention_nchw,
 )
 from ultralytics.utils import (
     DEFAULT_CFG_DICT,
@@ -896,7 +897,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             c2 = ch[f]
 
         # BiLevelRouting Attention Module
-        elif m in {BiLevelRoutingAttention}:
+        elif m in {BiLevelRoutingAttention, BiLevelRoutingAttention_nchw}:
             c2 = ch[f]
             args = [c2, *args]
         # END OF ATTENTION MODULE
