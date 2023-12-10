@@ -2,6 +2,7 @@ import torch
 from torch import nn, Tensor
 from typing import Tuple
 from einops import rearrange
+import torch.nn.functional as F
 
 __all__ = ["SimAM", "BiLevelRoutingAttention"]
 
