@@ -41,6 +41,7 @@ from ultralytics.nn.modules import (
     SimAM,
     BiLevelRoutingAttention,
     BiLevelRoutingAttention_nchw,
+    C2f_Faster,
 )
 from ultralytics.utils import (
     DEFAULT_CFG_DICT,
@@ -822,7 +823,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
         d.get(x, 1.0) for x in ("depth_multiple", "width_multiple", "kpt_shape")
     )
     if scales:
-        scale = d.get("scale")
+        scale = "s"
         if not scale:
             scale = tuple(scales.keys())[0]
             LOGGER.warning(
@@ -875,6 +876,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             DWConvTranspose2d,
             C3x,
             RepC3,
+            C2f_Faster,
         ):
             c1, c2 = ch[f], args[0]
             if (
@@ -883,7 +885,18 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 c2 = make_divisible(min(c2, max_channels) * width, 8)
 
             args = [c1, c2, *args[1:]]
-            if m in (BottleneckCSP, C1, C2, C2f, C3, C3TR, C3Ghost, C3x, RepC3):
+            if m in (
+                BottleneckCSP,
+                C1,
+                C2,
+                C2f,
+                C3,
+                C3TR,
+                C3Ghost,
+                C3x,
+                RepC3,
+                C2f_Faster,
+            ):
                 args.insert(2, n)  # number of repeats
                 n = 1
         elif m is AIFI:

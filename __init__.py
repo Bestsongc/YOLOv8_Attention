@@ -35,6 +35,7 @@ from .block import (
     HGStem,
     Proto,
     RepC3,
+    C2f_Faster,
 )
 
 from .conv import (
@@ -118,4 +119,5 @@ __all__ = (
     "SimAM",
     "BiLevelRoutingAttention",
     "BiLevelRoutingAttention_nchw",
+    "C2f_Faster",
 )
