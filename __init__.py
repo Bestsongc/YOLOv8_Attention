@@ -36,6 +36,8 @@ from .block import (
     Proto,
     RepC3,
     C2f_Faster,
+    C2f_SCConv,
+    C2f_ScConv
 )
 
 from .conv import (

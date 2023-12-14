@@ -27,7 +27,9 @@ __all__ = (
     "BottleneckCSP",
     "Proto",
     "RepC3",
-    "C2f_Faster"
+    "C2f_Faster",
+    "C2f_SCConv",
+    "C2f_ScConv",
 )
 
 
@@ -492,3 +494,228 @@ class C2f_Faster(C2f):
 
 
 ######################################## C2f-Faster end ########################################
+
+######################################## SCConv begin ########################################
+
+
+# CVPR 2020 http://mftp.mmcheng.net/Papers/20cvprSCNet.pdf
+class SCConv(nn.Module):
+    # https://github.com/MCG-NKU/SCNet/blob/master/scnet.py
+    def __init__(self, c1, c2, s=1, d=1, g=1, pooling_r=4):
+        super(SCConv, self).__init__()
+        self.k2 = nn.Sequential(
+            nn.AvgPool2d(kernel_size=pooling_r, stride=pooling_r),
+            Conv(c1, c2, k=3, d=d, g=g, act=False),
+        )
+        self.k3 = Conv(c1, c2, k=3, d=d, g=g, act=False)
+        self.k4 = Conv(c1, c2, k=3, s=s, d=d, g=g, act=False)
+
+    def forward(self, x):
+        identity = x
+
+        out = torch.sigmoid(
+            torch.add(identity, F.interpolate(self.k2(x), identity.size()[2:]))
+        )  # sigmoid(identity + k2)
+        out = torch.mul(self.k3(x), out)  # k3 * sigmoid(identity + k2)
+        out = self.k4(out)  # k4
+
+        return out
+
+
+class Bottleneck_SCConv(Bottleneck):
+    def __init__(self, c1, c2, shortcut=True, g=1, k=(3, 3), e=0.5):
+        super().__init__(c1, c2, shortcut, g, k, e)
+        c_ = int(c2 * e)  # hidden channels
+        self.cv1 = Conv(c1, c_, k[0], 1)
+        self.cv2 = SCConv(c_, c2, g=g)
+
+
+class C3_SCConv(C3):
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        c_ = int(c2 * e)  # hidden channels
+        self.m = nn.Sequential(
+            *(
+                Bottleneck_SCConv(c_, c_, shortcut, g, k=((1, 1), (3, 3)), e=1.0)
+                for _ in range(n)
+            )
+        )
+
+
+class C2f_SCConv(C2f):
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        self.m = nn.ModuleList(
+            Bottleneck_SCConv(self.c, self.c, shortcut, g, k=(3, 3), e=1.0)
+            for _ in range(n)
+        )
+
+
+######################################## SCConv end ########################################
+
+######################################## ScConv begin ########################################
+
+
+# CVPR2023 https://openaccess.thecvf.com/content/CVPR2023/papers/Li_SCConv_Spatial_and_Channel_Reconstruction_Convolution_for_Feature_Redundancy_CVPR_2023_paper.pdf
+class GroupBatchnorm2d(nn.Module):
+    def __init__(self, c_num: int, group_num: int = 16, eps: float = 1e-10):
+        super(GroupBatchnorm2d, self).__init__()
+        assert c_num >= group_num
+        self.group_num = group_num
+        self.gamma = nn.Parameter(torch.randn(c_num, 1, 1))
+        self.beta = nn.Parameter(torch.zeros(c_num, 1, 1))
+        self.eps = eps
+
+    def forward(self, x):
+        N, C, H, W = x.size()
+        x = x.view(N, self.group_num, -1)
+        mean = x.mean(dim=2, keepdim=True)
+        std = x.std(dim=2, keepdim=True)
+        x = (x - mean) / (std + self.eps)
+        x = x.view(N, C, H, W)
+        return x * self.gamma + self.beta
+
+
+class SRU(nn.Module):
+    def __init__(
+        self, oup_channels: int, group_num: int = 16, gate_treshold: float = 0.5
+    ):
+        super().__init__()
+
+        self.gn = GroupBatchnorm2d(oup_channels, group_num=group_num)
+        self.gate_treshold = gate_treshold
+        self.sigomid = nn.Sigmoid()
+
+    def forward(self, x):
+        gn_x = self.gn(x)
+        w_gamma = self.gn.gamma / sum(self.gn.gamma)
+        reweigts = self.sigomid(gn_x * w_gamma)
+        # Gate
+        info_mask = reweigts >= self.gate_treshold
+        noninfo_mask = reweigts < self.gate_treshold
+        x_1 = info_mask * x
+        x_2 = noninfo_mask * x
+        x = self.reconstruct(x_1, x_2)
+        return x
+
+    def reconstruct(self, x_1, x_2):
+        x_11, x_12 = torch.split(x_1, x_1.size(1) // 2, dim=1)
+        x_21, x_22 = torch.split(x_2, x_2.size(1) // 2, dim=1)
+        return torch.cat([x_11 + x_22, x_12 + x_21], dim=1)
+
+
+class CRU(nn.Module):
+    """
+    alpha: 0<alpha<1
+    """
+
+    def __init__(
+        self,
+        op_channel: int,
+        alpha: float = 1 / 2,
+        squeeze_radio: int = 2,
+        group_size: int = 2,
+        group_kernel_size: int = 3,
+    ):
+        super().__init__()
+        self.up_channel = up_channel = int(alpha * op_channel)
+        self.low_channel = low_channel = op_channel - up_channel
+        self.squeeze1 = nn.Conv2d(
+            up_channel, up_channel // squeeze_radio, kernel_size=1, bias=False
+        )
+        self.squeeze2 = nn.Conv2d(
+            low_channel, low_channel // squeeze_radio, kernel_size=1, bias=False
+        )
+        # up
+        self.GWC = nn.Conv2d(
+            up_channel // squeeze_radio,
+            op_channel,
+            kernel_size=group_kernel_size,
+            stride=1,
+            padding=group_kernel_size // 2,
+            groups=group_size,
+        )
+        self.PWC1 = nn.Conv2d(
+            up_channel // squeeze_radio, op_channel, kernel_size=1, bias=False
+        )
+        # low
+        self.PWC2 = nn.Conv2d(
+            low_channel // squeeze_radio,
+            op_channel - low_channel // squeeze_radio,
+            kernel_size=1,
+            bias=False,
+        )
+        self.advavg = nn.AdaptiveAvgPool2d(1)
+
+    def forward(self, x):
+        # Split
+        up, low = torch.split(x, [self.up_channel, self.low_channel], dim=1)
+        up, low = self.squeeze1(up), self.squeeze2(low)
+        # Transform
+        Y1 = self.GWC(up) + self.PWC1(up)
+        Y2 = torch.cat([self.PWC2(low), low], dim=1)
+        # Fuse
+        out = torch.cat([Y1, Y2], dim=1)
+        out = F.softmax(self.advavg(out), dim=1) * out
+        out1, out2 = torch.split(out, out.size(1) // 2, dim=1)
+        return out1 + out2
+
+
+class ScConv(nn.Module):
+    # https://github.com/cheng-haha/ScConv/blob/main/ScConv.py
+    def __init__(
+        self,
+        op_channel: int,
+        group_num: int = 16,
+        gate_treshold: float = 0.5,
+        alpha: float = 1 / 2,
+        squeeze_radio: int = 2,
+        group_size: int = 2,
+        group_kernel_size: int = 3,
+    ):
+        super().__init__()
+        self.SRU = SRU(op_channel, group_num=group_num, gate_treshold=gate_treshold)
+        self.CRU = CRU(
+            op_channel,
+            alpha=alpha,
+            squeeze_radio=squeeze_radio,
+            group_size=group_size,
+            group_kernel_size=group_kernel_size,
+        )
+
+    def forward(self, x):
+        x = self.SRU(x)
+        x = self.CRU(x)
+        return x
+
+
+class Bottleneck_ScConv(Bottleneck):
+    def __init__(self, c1, c2, shortcut=True, g=1, k=(3, 3), e=0.5):
+        super().__init__(c1, c2, shortcut, g, k, e)
+        c_ = int(c2 * e)  # hidden channels
+        self.cv1 = Conv(c1, c_, k[0], 1)
+        self.cv2 = ScConv(c2)
+
+
+class C3_ScConv(C3):
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        c_ = int(c2 * e)  # hidden channels
+        self.m = nn.Sequential(
+            *(
+                Bottleneck_ScConv(c_, c_, shortcut, g, k=((1, 1), (3, 3)), e=1.0)
+                for _ in range(n)
+            )
+        )
+
+
+class C2f_ScConv(C2f):
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        self.m = nn.ModuleList(
+            Bottleneck_ScConv(self.c, self.c, shortcut, g, k=(3, 3), e=1.0)
+            for _ in range(n)
+        )
+
+
+######################################## ScConv end ########################################

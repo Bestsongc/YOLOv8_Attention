@@ -42,6 +42,8 @@ from ultralytics.nn.modules import (
     BiLevelRoutingAttention,
     BiLevelRoutingAttention_nchw,
     C2f_Faster,
+    C2f_SCConv,
+    C2f_ScConv,
 )
 from ultralytics.utils import (
     DEFAULT_CFG_DICT,
@@ -823,7 +825,10 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
         d.get(x, 1.0) for x in ("depth_multiple", "width_multiple", "kpt_shape")
     )
     if scales:
-        scale = "s"
+        # scale = d.get('scale')
+
+        scale = "s"  # Setting scale to small
+
         if not scale:
             scale = tuple(scales.keys())[0]
             LOGGER.warning(
@@ -877,6 +882,8 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             C3x,
             RepC3,
             C2f_Faster,
+            C2f_SCConv,
+            C2f_ScConv,
         ):
             c1, c2 = ch[f], args[0]
             if (
@@ -896,6 +903,8 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 C3x,
                 RepC3,
                 C2f_Faster,
+                C2f_SCConv,
+                C2f_ScConv,
             ):
                 args.insert(2, n)  # number of repeats
                 n = 1
