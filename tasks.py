@@ -823,7 +823,11 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
         d.get(x, 1.0) for x in ("depth_multiple", "width_multiple", "kpt_shape")
     )
     if scales:
+<<<<<<< HEAD
         scale = "s"
+=======
+        scale = 's'
+>>>>>>> 17eb7ecc66ac9b1c2f3aa0ee18fbb73147154904
         if not scale:
             scale = tuple(scales.keys())[0]
             LOGGER.warning(
