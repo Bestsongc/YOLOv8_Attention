@@ -44,6 +44,8 @@ from ultralytics.nn.modules import (
     C2f_Faster,
     C2f_SCConv,
     C2f_ScConv,
+    C2f_ContextGuided,
+    C2f_DCNv2_Dynamic,
 )
 from ultralytics.utils import (
     DEFAULT_CFG_DICT,
@@ -884,6 +886,8 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             C2f_Faster,
             C2f_SCConv,
             C2f_ScConv,
+            C2f_ContextGuided,
+            C2f_DCNv2_Dynamic,
         ):
             c1, c2 = ch[f], args[0]
             if (
@@ -905,6 +909,8 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 C2f_Faster,
                 C2f_SCConv,
                 C2f_ScConv,
+                C2f_ContextGuided,
+                C2f_DCNv2_Dynamic,
             ):
                 args.insert(2, n)  # number of repeats
                 n = 1

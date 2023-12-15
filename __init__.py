@@ -37,7 +37,9 @@ from .block import (
     RepC3,
     C2f_Faster,
     C2f_SCConv,
-    C2f_ScConv
+    C2f_ScConv,
+    C2f_ContextGuided,
+    C2f_DCNv2_Dynamic,
 )
 
 from .conv import (
@@ -54,6 +56,7 @@ from .conv import (
     LightConv,
     RepConv,
     SpatialAttention,
+    MPCA,
 )
 
 from .attention import SimAM, BiLevelRoutingAttention, BiLevelRoutingAttention_nchw
@@ -122,4 +125,9 @@ __all__ = (
     "BiLevelRoutingAttention",
     "BiLevelRoutingAttention_nchw",
     "C2f_Faster",
+    "C2f_ContextGuided",
+    "MPCA",
+    "C2f_DCNv2_Dynamic",
+    "C2f_SCConv",
+    "C2f_ScConv",
 )

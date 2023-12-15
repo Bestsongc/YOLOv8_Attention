@@ -1,12 +1,12 @@
 # Ultralytics YOLO 🚀, AGPL-3.0 license
 """Block modules."""
-
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from timm.models.layers import DropPath
 
-from .conv import Conv, DWConv, GhostConv, LightConv, RepConv
+from .conv import autopad, Conv, DWConv, GhostConv, LightConv, RepConv, MPCA
 from .transformer import TransformerBlock
 
 __all__ = (
@@ -30,6 +30,9 @@ __all__ = (
     "C2f_Faster",
     "C2f_SCConv",
     "C2f_ScConv",
+    "C2f_ContextGuided",
+    "MPCA",
+    "C2f_DCNv2_Dynamic"
 )
 
 
@@ -719,3 +722,264 @@ class C2f_ScConv(C2f):
 
 
 ######################################## ScConv end ########################################
+
+######################################## ContextGuidedBlock start ########################################
+
+
+class FGlo(nn.Module):
+    """
+    the FGlo class is employed to refine the joint feature of both local feature and surrounding context.
+    """
+
+    def __init__(self, channel, reduction=16):
+        super(FGlo, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channel, channel // reduction),
+            nn.ReLU(inplace=True),
+            nn.Linear(channel // reduction, channel),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1, 1)
+        return x * y
+
+
+class ContextGuidedBlock(nn.Module):
+    def __init__(self, nIn, nOut, dilation_rate=2, reduction=16, add=True):
+        """
+        args:
+           nIn: number of input channels
+           nOut: number of output channels,
+           add: if true, residual learning
+        """
+        super().__init__()
+        n = int(nOut / 2)
+        self.conv1x1 = Conv(
+            nIn, n, 1, 1
+        )  # 1x1 Conv is employed to reduce the computation
+        self.F_loc = nn.Conv2d(n, n, 3, padding=1, groups=n)
+        self.F_sur = nn.Conv2d(
+            n,
+            n,
+            3,
+            padding=autopad(3, None, dilation_rate),
+            dilation=dilation_rate,
+            groups=n,
+        )  # surrounding context
+        self.bn_act = nn.Sequential(nn.BatchNorm2d(nOut), Conv.default_act)
+        self.add = add
+        self.F_glo = FGlo(nOut, reduction)
+
+    def forward(self, input):
+        output = self.conv1x1(input)
+        loc = self.F_loc(output)
+        sur = self.F_sur(output)
+
+        joi_feat = torch.cat([loc, sur], 1)
+
+        joi_feat = self.bn_act(joi_feat)
+
+        output = self.F_glo(joi_feat)  # F_glo is employed to refine the joint feature
+        # if residual version
+        if self.add:
+            output = input + output
+        return output
+
+
+class ContextGuidedBlock_Down(nn.Module):
+    """
+    the size of feature map divided 2, (H,W,C)---->(H/2, W/2, 2C)
+    """
+
+    def __init__(self, nIn, dilation_rate=2, reduction=16):
+        """
+        args:
+           nIn: the channel of input feature map
+           nOut: the channel of output feature map, and nOut=2*nIn
+        """
+        super().__init__()
+        nOut = 2 * nIn
+        self.conv1x1 = Conv(nIn, nOut, 3, s=2)  #  size/2, channel: nIn--->nOut
+
+        self.F_loc = nn.Conv2d(nOut, nOut, 3, padding=1, groups=nOut)
+        self.F_sur = nn.Conv2d(
+            nOut,
+            nOut,
+            3,
+            padding=autopad(3, None, dilation_rate),
+            dilation=dilation_rate,
+            groups=nOut,
+        )
+
+        self.bn = nn.BatchNorm2d(2 * nOut, eps=1e-3)
+        self.act = Conv.default_act
+        self.reduce = Conv(2 * nOut, nOut, 1, 1)  # reduce dimension: 2*nOut--->nOut
+
+        self.F_glo = FGlo(nOut, reduction)
+
+    def forward(self, input):
+        output = self.conv1x1(input)
+        loc = self.F_loc(output)
+        sur = self.F_sur(output)
+
+        joi_feat = torch.cat([loc, sur], 1)  #  the joint feature
+        joi_feat = self.bn(joi_feat)
+        joi_feat = self.act(joi_feat)
+        joi_feat = self.reduce(joi_feat)  # channel= nOut
+
+        output = self.F_glo(joi_feat)  # F_glo is employed to refine the joint feature
+
+        return output
+
+
+class C3_ContextGuided(C3):
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        c_ = int(c2 * e)  # hidden channels
+        self.m = nn.Sequential(*(ContextGuidedBlock(c_, c_) for _ in range(n)))
+
+
+class C2f_ContextGuided(C2f):
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        self.m = nn.ModuleList(ContextGuidedBlock(self.c, self.c) for _ in range(n))
+
+
+######################################## ContextGuidedBlock end ########################################
+
+######################################## C3 C2f DCNV2_Dynamic start ########################################
+
+
+class DCNv2_Offset_Attention(nn.Module):
+    def __init__(self, in_channels, kernel_size, stride, deformable_groups=1) -> None:
+        super().__init__()
+
+        padding = autopad(kernel_size, None, 1)
+        self.out_channel = deformable_groups * 3 * kernel_size * kernel_size
+        self.conv_offset_mask = nn.Conv2d(
+            in_channels, self.out_channel, kernel_size, stride, padding, bias=True
+        )
+        self.attention = MPCA(self.out_channel)
+
+    def forward(self, x):
+        conv_offset_mask = self.conv_offset_mask(x)
+        conv_offset_mask = self.attention(conv_offset_mask)
+        return conv_offset_mask
+
+
+class DCNv2_Dynamic(nn.Module):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride=1,
+        padding=None,
+        groups=1,
+        dilation=1,
+        act=True,
+        deformable_groups=1,
+    ):
+        super(DCNv2_Dynamic, self).__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = (kernel_size, kernel_size)
+        self.stride = (stride, stride)
+        padding = autopad(kernel_size, padding, dilation)
+        self.padding = (padding, padding)
+        self.dilation = (dilation, dilation)
+        self.groups = groups
+        self.deformable_groups = deformable_groups
+
+        self.weight = nn.Parameter(
+            torch.empty(out_channels, in_channels, *self.kernel_size)
+        )
+        self.bias = nn.Parameter(torch.empty(out_channels))
+
+        self.conv_offset_mask = DCNv2_Offset_Attention(
+            in_channels, kernel_size, stride, deformable_groups
+        )
+        self.bn = nn.BatchNorm2d(out_channels)
+        self.act = (
+            Conv.default_act
+            if act is True
+            else act
+            if isinstance(act, nn.Module)
+            else nn.Identity()
+        )
+        self.reset_parameters()
+
+    def forward(self, x):
+        offset_mask = self.conv_offset_mask(x)
+        o1, o2, mask = torch.chunk(offset_mask, 3, dim=1)
+        offset = torch.cat((o1, o2), dim=1)
+        mask = torch.sigmoid(mask)
+        x = torch.ops.torchvision.deform_conv2d(
+            x,
+            self.weight,
+            offset,
+            mask,
+            self.bias,
+            self.stride[0],
+            self.stride[1],
+            self.padding[0],
+            self.padding[1],
+            self.dilation[0],
+            self.dilation[1],
+            self.groups,
+            self.deformable_groups,
+            True,
+        )
+        x = self.bn(x)
+        x = self.act(x)
+        return x
+
+    def reset_parameters(self):
+        n = self.in_channels
+        for k in self.kernel_size:
+            n *= k
+        std = 1.0 / math.sqrt(n)
+        self.weight.data.uniform_(-std, std)
+        self.bias.data.zero_()
+        self.conv_offset_mask.conv_offset_mask.weight.data.zero_()
+        self.conv_offset_mask.conv_offset_mask.bias.data.zero_()
+
+
+class Bottleneck_DCNV2_Dynamic(Bottleneck):
+    """Standard bottleneck with DCNV2."""
+
+    def __init__(
+        self, c1, c2, shortcut=True, g=1, k=(3, 3), e=0.5
+    ):  # ch_in, ch_out, shortcut, groups, kernels, expand
+        super().__init__(c1, c2, shortcut, g, k, e)
+        c_ = int(c2 * e)  # hidden channels
+        self.cv2 = DCNv2_Dynamic(c_, c2, k[1], 1)
+
+
+class C3_DCNv2_Dynamic(C3):
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        c_ = int(c2 * e)  # hidden channels
+        self.m = nn.Sequential(
+            *(
+                Bottleneck_DCNV2_Dynamic(c_, c_, shortcut, g, k=(1, 3), e=1.0)
+                for _ in range(n)
+            )
+        )
+
+
+class C2f_DCNv2_Dynamic(C2f):
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        self.m = nn.ModuleList(
+            Bottleneck_DCNV2_Dynamic(self.c, self.c, shortcut, g, k=(3, 3), e=1.0)
+            for _ in range(n)
+        )
+
+
+######################################## C3 C2f DCNV2_Dynamic end ########################################
