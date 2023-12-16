@@ -39,7 +39,7 @@ from .block import (
     C2f_SCConv,
     C2f_ScConv,
     C2f_ContextGuided,
-    C2f_DCNv2_Dynamic,
+    C2f_MSBlock,
 )
 
 from .conv import (
@@ -127,7 +127,7 @@ __all__ = (
     "C2f_Faster",
     "C2f_ContextGuided",
     "MPCA",
-    "C2f_DCNv2_Dynamic",
+    "C2f_MSBlock",
     "C2f_SCConv",
     "C2f_ScConv",
 )

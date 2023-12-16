@@ -32,7 +32,7 @@ __all__ = (
     "C2f_ScConv",
     "C2f_ContextGuided",
     "MPCA",
-    "C2f_DCNv2_Dynamic"
+    "C2f_MSBlock"
 )
 
 
@@ -851,135 +851,82 @@ class C2f_ContextGuided(C2f):
 
 ######################################## ContextGuidedBlock end ########################################
 
-######################################## C3 C2f DCNV2_Dynamic start ########################################
+
+######################################## MS-Block start ########################################
 
 
-class DCNv2_Offset_Attention(nn.Module):
-    def __init__(self, in_channels, kernel_size, stride, deformable_groups=1) -> None:
+class MSBlockLayer(nn.Module):
+    def __init__(self, inc, ouc, k) -> None:
         super().__init__()
 
-        padding = autopad(kernel_size, None, 1)
-        self.out_channel = deformable_groups * 3 * kernel_size * kernel_size
-        self.conv_offset_mask = nn.Conv2d(
-            in_channels, self.out_channel, kernel_size, stride, padding, bias=True
-        )
-        self.attention = MPCA(self.out_channel)
+        self.in_conv = Conv(inc, ouc, 1)
+        self.mid_conv = Conv(ouc, ouc, k, g=ouc)
+        self.out_conv = Conv(ouc, inc, 1)
 
     def forward(self, x):
-        conv_offset_mask = self.conv_offset_mask(x)
-        conv_offset_mask = self.attention(conv_offset_mask)
-        return conv_offset_mask
+        return self.out_conv(self.mid_conv(self.in_conv(x)))
 
 
-class DCNv2_Dynamic(nn.Module):
+class MSBlock(nn.Module):
     def __init__(
         self,
-        in_channels,
-        out_channels,
-        kernel_size,
-        stride=1,
-        padding=None,
-        groups=1,
-        dilation=1,
-        act=True,
-        deformable_groups=1,
-    ):
-        super(DCNv2_Dynamic, self).__init__()
+        inc,
+        ouc,
+        kernel_sizes,
+        in_expand_ratio=3.0,
+        mid_expand_ratio=2.0,
+        layers_num=3,
+        in_down_ratio=2.0,
+    ) -> None:
+        super().__init__()
 
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.kernel_size = (kernel_size, kernel_size)
-        self.stride = (stride, stride)
-        padding = autopad(kernel_size, padding, dilation)
-        self.padding = (padding, padding)
-        self.dilation = (dilation, dilation)
-        self.groups = groups
-        self.deformable_groups = deformable_groups
+        in_channel = int(inc * in_expand_ratio // in_down_ratio)
+        self.mid_channel = in_channel // len(kernel_sizes)
+        groups = int(self.mid_channel * mid_expand_ratio)
+        self.in_conv = Conv(inc, in_channel)
 
-        self.weight = nn.Parameter(
-            torch.empty(out_channels, in_channels, *self.kernel_size)
-        )
-        self.bias = nn.Parameter(torch.empty(out_channels))
+        self.mid_convs = []
+        for kernel_size in kernel_sizes:
+            if kernel_size == 1:
+                self.mid_convs.append(nn.Identity())
+                continue
+            mid_convs = [
+                MSBlockLayer(self.mid_channel, groups, k=kernel_size)
+                for _ in range(int(layers_num))
+            ]
+            self.mid_convs.append(nn.Sequential(*mid_convs))
+        self.mid_convs = nn.ModuleList(self.mid_convs)
+        self.out_conv = Conv(in_channel, ouc, 1)
 
-        self.conv_offset_mask = DCNv2_Offset_Attention(
-            in_channels, kernel_size, stride, deformable_groups
-        )
-        self.bn = nn.BatchNorm2d(out_channels)
-        self.act = (
-            Conv.default_act
-            if act is True
-            else act
-            if isinstance(act, nn.Module)
-            else nn.Identity()
-        )
-        self.reset_parameters()
+        self.attention = None
 
     def forward(self, x):
-        offset_mask = self.conv_offset_mask(x)
-        o1, o2, mask = torch.chunk(offset_mask, 3, dim=1)
-        offset = torch.cat((o1, o2), dim=1)
-        mask = torch.sigmoid(mask)
-        x = torch.ops.torchvision.deform_conv2d(
-            x,
-            self.weight,
-            offset,
-            mask,
-            self.bias,
-            self.stride[0],
-            self.stride[1],
-            self.padding[0],
-            self.padding[1],
-            self.dilation[0],
-            self.dilation[1],
-            self.groups,
-            self.deformable_groups,
-            True,
-        )
-        x = self.bn(x)
-        x = self.act(x)
-        return x
-
-    def reset_parameters(self):
-        n = self.in_channels
-        for k in self.kernel_size:
-            n *= k
-        std = 1.0 / math.sqrt(n)
-        self.weight.data.uniform_(-std, std)
-        self.bias.data.zero_()
-        self.conv_offset_mask.conv_offset_mask.weight.data.zero_()
-        self.conv_offset_mask.conv_offset_mask.bias.data.zero_()
+        out = self.in_conv(x)
+        channels = []
+        for i, mid_conv in enumerate(self.mid_convs):
+            channel = out[:, i * self.mid_channel : (i + 1) * self.mid_channel, ...]
+            if i >= 1:
+                channel = channel + channels[i - 1]
+            channel = mid_conv(channel)
+            channels.append(channel)
+        out = torch.cat(channels, dim=1)
+        out = self.out_conv(out)
+        if self.attention is not None:
+            out = self.attention(out)
+        return out
 
 
-class Bottleneck_DCNV2_Dynamic(Bottleneck):
-    """Standard bottleneck with DCNV2."""
-
-    def __init__(
-        self, c1, c2, shortcut=True, g=1, k=(3, 3), e=0.5
-    ):  # ch_in, ch_out, shortcut, groups, kernels, expand
-        super().__init__(c1, c2, shortcut, g, k, e)
-        c_ = int(c2 * e)  # hidden channels
-        self.cv2 = DCNv2_Dynamic(c_, c2, k[1], 1)
-
-
-class C3_DCNv2_Dynamic(C3):
-    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+class C3_MSBlock(C3):
+    def __init__(self, c1, c2, n=1, kernel_sizes=[1, 3, 3], shortcut=False, g=1, e=0.5):
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2 * e)  # hidden channels
-        self.m = nn.Sequential(
-            *(
-                Bottleneck_DCNV2_Dynamic(c_, c_, shortcut, g, k=(1, 3), e=1.0)
-                for _ in range(n)
-            )
-        )
+        self.m = nn.Sequential(*(MSBlock(c_, c_, kernel_sizes) for _ in range(n)))
 
 
-class C2f_DCNv2_Dynamic(C2f):
-    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+class C2f_MSBlock(C2f):
+    def __init__(self, c1, c2, n=1, kernel_sizes=[1, 3, 3], shortcut=False, g=1, e=0.5):
         super().__init__(c1, c2, n, shortcut, g, e)
-        self.m = nn.ModuleList(
-            Bottleneck_DCNV2_Dynamic(self.c, self.c, shortcut, g, k=(3, 3), e=1.0)
-            for _ in range(n)
-        )
+        self.m = nn.ModuleList(MSBlock(self.c, self.c, kernel_sizes) for _ in range(n))
 
 
-######################################## C3 C2f DCNV2_Dynamic end ########################################
+######################################## MS-Block end ########################################
