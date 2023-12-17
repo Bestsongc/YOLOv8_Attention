@@ -40,7 +40,8 @@ from .block import (
     C2f_ScConv,
     C2f_ContextGuided,
     C2f_MSBlock,
-    C2f_DBB
+    C2f_DBB,
+    C2f_DySnakeConv,
 )
 
 from .conv import (
@@ -131,5 +132,6 @@ __all__ = (
     "C2f_MSBlock",
     "C2f_SCConv",
     "C2f_ScConv",
-    "C2f_DBB"
+    "C2f_DBB",
+    "C2f_DySnakeConv",
 )
