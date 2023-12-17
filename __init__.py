@@ -42,6 +42,7 @@ from .block import (
     C2f_MSBlock,
     C2f_DBB,
     C2f_DySnakeConv,
+    C2f_CloAtt,
 )
 
 from .conv import (
@@ -61,7 +62,12 @@ from .conv import (
     MPCA,
 )
 
-from .attention import SimAM, BiLevelRoutingAttention, BiLevelRoutingAttention_nchw
+from .attention import (
+    SimAM,
+    BiLevelRoutingAttention,
+    BiLevelRoutingAttention_nchw,
+    EfficientAttention,
+)
 
 from .head import Classify, Detect, Pose, RTDETRDecoder, Segment
 from .transformer import (
@@ -134,4 +140,6 @@ __all__ = (
     "C2f_ScConv",
     "C2f_DBB",
     "C2f_DySnakeConv",
+    "EfficientAttention",
+    "C2f_CloAtt",
 )

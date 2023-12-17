@@ -48,6 +48,8 @@ from ultralytics.nn.modules import (
     C2f_MSBlock,
     C2f_DBB,
     C2f_DySnakeConv,
+    EfficientAttention,
+    C2f_CloAtt,
 )
 from ultralytics.utils import (
     DEFAULT_CFG_DICT,
@@ -892,6 +894,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             C2f_MSBlock,
             C2f_DBB,
             C2f_DySnakeConv,
+            C2f_CloAtt,
         ):
             c1, c2 = ch[f], args[0]
             if (
@@ -917,6 +920,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 C2f_MSBlock,
                 C2f_DBB,
                 C2f_DySnakeConv,
+                C2f_CloAtt,
             ):
                 args.insert(2, n)  # number of repeats
                 n = 1
@@ -931,7 +935,11 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             c2 = ch[f]
 
         # BiLevelRouting Attention Module
-        elif m in {BiLevelRoutingAttention, BiLevelRoutingAttention_nchw}:
+        elif m in {
+            BiLevelRoutingAttention,
+            BiLevelRoutingAttention_nchw,
+            EfficientAttention,
+        }:
             c2 = ch[f]
             args = [c2, *args]
         # END OF ATTENTION MODULE
