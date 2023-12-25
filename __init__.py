@@ -43,6 +43,7 @@ from .block import (
     C2f_DBB,
     C2f_DySnakeConv,
     C2f_CloAtt,
+    ContextGuidedBlock_Down,
 )
 
 from .conv import (
@@ -142,4 +143,5 @@ __all__ = (
     "C2f_DySnakeConv",
     "EfficientAttention",
     "C2f_CloAtt",
+    "ContextGuidedBlock_Down",
 )

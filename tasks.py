@@ -50,6 +50,7 @@ from ultralytics.nn.modules import (
     C2f_DySnakeConv,
     EfficientAttention,
     C2f_CloAtt,
+    ContextGuidedBlock_Down,
 )
 from ultralytics.utils import (
     DEFAULT_CFG_DICT,
@@ -943,6 +944,11 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             c2 = ch[f]
             args = [c2, *args]
         # END OF ATTENTION MODULE
+
+        # Context Guided Block
+        elif m is ContextGuidedBlock_Down:
+            c2 = ch[f] * 2
+            args = [ch[f], c2, *args]
 
         elif m in (HGStem, HGBlock):
             c1, cm, c2 = ch[f], args[0], args[1]

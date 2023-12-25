@@ -36,8 +36,9 @@ __all__ = (
     "MPCA",
     "C2f_MSBlock",
     "C2f_DBB",
-    "C2f_DySnakeConv"
-    "C2f_CloAtt"
+    "C2f_DySnakeConv",
+    "C2f_CloAtt",
+    "ContextGuidedBlock_Down"
 )
 
 
@@ -1807,8 +1808,9 @@ class C2f_DySnakeConv(C2f):
 
 
 ######################################## C3 C2f DySnakeConv end ########################################
-        
+
 ######################################## C2f-CloAtt begin ########################################
+
 
 class Bottleneck_CloAtt(Bottleneck):
     """Standard bottleneck With CloAttention."""
@@ -1816,14 +1818,23 @@ class Bottleneck_CloAtt(Bottleneck):
     def __init__(self, c1, c2, shortcut=True, g=1, k=..., e=0.5):
         super().__init__(c1, c2, shortcut, g, k, e)
         self.attention = EfficientAttention(c2)
-    
+
     def forward(self, x):
         """'forward()' applies the YOLOv5 FPN to input data."""
-        return x + self.attention(self.cv2(self.cv1(x))) if self.add else self.attention(self.cv2(self.cv1(x)))
+        return (
+            x + self.attention(self.cv2(self.cv1(x)))
+            if self.add
+            else self.attention(self.cv2(self.cv1(x)))
+        )
+
 
 class C2f_CloAtt(C2f):
     def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
         super().__init__(c1, c2, n, shortcut, g, e)
-        self.m = nn.ModuleList(Bottleneck_CloAtt(self.c, self.c, shortcut, g, k=(3, 3), e=1.0) for _ in range(n))
+        self.m = nn.ModuleList(
+            Bottleneck_CloAtt(self.c, self.c, shortcut, g, k=(3, 3), e=1.0)
+            for _ in range(n)
+        )
+
 
 ######################################## C2f-CloAtt end ########################################
