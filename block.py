@@ -40,7 +40,8 @@ __all__ = (
     "C2f_DySnakeConv",
     "C2f_CloAtt",
     "ContextGuidedBlock_Down",
-    "C2f_EMSC"
+    "C2f_EMSC",
+    "C2f_EMSCP"
 )
 
 
